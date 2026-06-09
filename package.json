@@ -1,0 +1,36 @@
+{
+  "name": "pi-telegram-bot",
+  "version": "1.0.0",
+  "description": "Host-native Telegram bridge for pi coding agent",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "prepare": "npm run build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "pi-telegram-bot": "./dist/index.js"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.79.0",
+    "typebox": "^1.2.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.2",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  }
+}
