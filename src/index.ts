@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { execFile, spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { promisify } from 'node:util';
 import { createInterface } from 'node:readline/promises';
@@ -13,7 +14,7 @@ const execFileAsync = promisify(execFile);
 
 async function main(): Promise<void> {
   const [command = 'help', ...args] = process.argv.slice(2);
-  if (command === 'run-service') {
+  if (command === 'run-service' || command === 'start') {
     await runTelegramBot();
     return;
   }
@@ -38,7 +39,7 @@ async function main(): Promise<void> {
   }
   if (command === 'config') {
     console.log(configPath);
-    console.log(JSON.stringify(await readConfig(), null, 2));
+    console.log(JSON.stringify(redactConfig(await readConfig()), null, 2));
     return;
   }
   if (command === 'install-service') {
@@ -90,9 +91,14 @@ async function setupWizard(): Promise<void> {
     console.log(`✓ Connected to @${bot.username ?? bot.firstName ?? bot.id}`);
 
     const workspace = await ask(rl, `Agent working directory — where Telegram-controlled Pi should run [${config.workspaceDir}]: `);
-    if (workspace) config.workspaceDir = workspace;
+    if (workspace) config.workspaceDir = normalizePath(workspace);
+    config.workspaceDir = normalizePath(config.workspaceDir);
+    if (!existsSync(config.workspaceDir)) throw new Error(`Agent working directory does not exist: ${config.workspaceDir}`);
+
     const piAgentDir = await ask(rl, `Pi agent directory [${config.piAgentDir}]: `);
-    if (piAgentDir) config.piAgentDir = piAgentDir;
+    if (piAgentDir) config.piAgentDir = normalizePath(piAgentDir);
+    config.piAgentDir = normalizePath(config.piAgentDir);
+    if (!existsSync(config.piAgentDir)) throw new Error(`Pi agent directory does not exist: ${config.piAgentDir}`);
 
     const currentModel = config.selectedModel ? `${config.selectedModel.provider}/${config.selectedModel.id}` : 'auto first available model';
     const modelChoice = await ask(rl, `Model provider/id, or blank for ${currentModel}: `);
@@ -110,7 +116,14 @@ async function setupWizard(): Promise<void> {
     if (doDiscover !== 'n' && doDiscover !== 'no') {
       const botName = bot.username ? `@${bot.username}` : 'your bot';
       console.log(`Send any message to ${botName}. Waiting up to 60 seconds...`);
-      const senders = await discoverTelegramSenders(token, 60_000);
+      const discovery = await discoverTelegramSenders(token, 60_000);
+      const senders = discovery.senders;
+      if (discovery.offset) {
+        const fresh = await readConfig();
+        fresh.telegram.offset = discovery.offset;
+        await writeConfig(fresh);
+        console.log(`✓ Saved Telegram update offset ${discovery.offset}`);
+      }
       if (senders.length === 0) {
         console.log('No sender found. You can run `pi-telegram-bot senders` later, then `pi-telegram-bot allow <id>`.');
       } else {
@@ -275,6 +288,22 @@ async function showRecentLogs(): Promise<void> {
 
 async function ask(rl: ReturnType<typeof createInterface>, prompt: string): Promise<string> {
   return (await rl.question(prompt)).trim();
+}
+
+function normalizePath(path: string): string {
+  if (path === '~') return homedir();
+  if (path.startsWith('~/')) return resolve(homedir(), path.slice(2));
+  return resolve(path);
+}
+
+function redactConfig(config: Awaited<ReturnType<typeof readConfig>>) {
+  return {
+    ...config,
+    telegram: {
+      ...config.telegram,
+      botToken: config.telegram.botToken ? '[redacted]' : undefined,
+    },
+  };
 }
 
 function help(): void {
