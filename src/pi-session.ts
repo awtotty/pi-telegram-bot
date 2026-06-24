@@ -70,6 +70,11 @@ export class PiSessionRegistry {
     const configuredModel = config.selectedModel
       ? modelRegistry.find(config.selectedModel.provider, config.selectedModel.id)
       : undefined;
+    if (config.selectedModel && !configuredModel) {
+      const requested = `${config.selectedModel.provider}/${config.selectedModel.id}`;
+      const available = availableModels.map((model) => `${model.provider}/${model.id}`).join(', ') || 'none';
+      throw new Error(`Configured Pi model ${requested} is not available or authenticated. Run \`pi-telegram-bot setup\` and choose an available model. Available models: ${available}`);
+    }
     const selected = configuredModel ?? availableModels[0];
     if (!selected) throw new Error('No authenticated Pi models are available. Run pi login/config first.');
     sink({ type: 'status', text: `Using model ${selected.provider}/${selected.id}` });
