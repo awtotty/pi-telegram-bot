@@ -50,6 +50,8 @@ Telegram commands:
 - `/help` — show bot commands
 - `/whoami` — show your Telegram user id and chat id
 - `/new [name]` — start a fresh Pi session for this chat
+- `/model` — show the current model and available models
+- `/model <model-id>` — change this chat's Pi session model (use `provider/model-id` if the id is ambiguous)
 - `/status` — show configured paths
 
 ## Service management

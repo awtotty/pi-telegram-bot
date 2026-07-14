@@ -158,7 +158,7 @@ async function handleUpdate(update: TelegramUpdate, botToken: string, sessions: 
     return 'ignored';
   }
 
-  const command = await handleCommand(text, chatId, userId, botToken, log);
+  const command = await handleCommand(text, chatId, userId, botToken, sessions, log);
   if (command) return 'reply';
 
   const sessionId = await getOrCreateChatSession(String(chatId), log);
@@ -181,12 +181,12 @@ async function handleUpdate(update: TelegramUpdate, botToken: string, sessions: 
   return 'reply';
 }
 
-async function handleCommand(text: string, chatId: number | string, userId: string, botToken: string, log: Log): Promise<boolean> {
+async function handleCommand(text: string, chatId: number | string, userId: string, botToken: string, sessions: PiSessionRegistry, log: Log): Promise<boolean> {
   const [command, ...args] = text.split(/\s+/);
   switch (command?.toLowerCase()) {
     case '/help':
       log.info(`handling command /help chat=${chatId}`);
-      await sendTelegramMessage(botToken, chatId, 'Commands:\n/help — show this help\n/whoami — show your Telegram user id\n/new [name] — start a fresh Pi session for this chat\n/status — show configured paths', log);
+      await sendTelegramMessage(botToken, chatId, 'Commands:\n/help — show this help\n/whoami — show your Telegram user id\n/new [name] — start a fresh Pi session for this chat\n/model [model-id | provider/model-id] — show or change this session’s model\n/status — show configured paths', log);
       return true;
     case '/whoami':
       log.info(`handling command /whoami chat=${chatId}`);
@@ -194,12 +194,31 @@ async function handleCommand(text: string, chatId: number | string, userId: stri
       return true;
     case '/new': {
       const config = await readConfig();
+      const previousSessionId = config.chatSessions[String(chatId)];
       const sessionId = crypto.randomUUID();
       config.chatSessions[String(chatId)] = sessionId;
+      if (previousSessionId) delete config.sessionModels[previousSessionId];
       await writeConfig(config);
       const name = args.join(' ').trim();
       log.info(`handling command /new chat=${chatId} session=${sessionId}`);
       await sendTelegramMessage(botToken, chatId, `Started new Pi session${name ? ` (${name})` : ''}:\n${sessionId}`, log);
+      return true;
+    }
+    case '/model': {
+      const sessionId = await getOrCreateChatSession(String(chatId), log);
+      const selector = args.join(' ').trim();
+      log.info(`handling command /model chat=${chatId} session=${sessionId} selector=${selector || '(none)'}`);
+      try {
+        const info = selector
+          ? await sessions.setModel(sessionId, selector)
+          : await sessions.getModelInfo(sessionId);
+        const message = selector
+          ? `Model changed to ${info.current}`
+          : `Current model: ${info.current}\n\nAvailable models:\n${info.available.join('\n') || 'none'}\n\nUsage: /model <model-id or provider/model-id>`;
+        await sendTelegramMessage(botToken, chatId, message, log);
+      } catch (error) {
+        await sendTelegramMessage(botToken, chatId, error instanceof Error ? error.message : String(error), log);
+      }
       return true;
     }
     case '/status': {

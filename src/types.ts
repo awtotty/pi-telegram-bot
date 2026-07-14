@@ -10,6 +10,7 @@ export type BotConfig = {
   piAgentDir: string;
   sessionDir: string;
   chatSessions: Record<string, string>;
+  sessionModels: Record<string, { provider: string; id: string }>;
 };
 
 export type AgentEvent =

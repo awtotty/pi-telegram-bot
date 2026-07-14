@@ -22,6 +22,7 @@ export function defaultConfig(): BotConfig {
     piAgentDir: process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent'),
     sessionDir: process.env.PI_CODING_AGENT_SESSION_DIR ?? join(dataDir, 'sessions'),
     chatSessions: {},
+    sessionModels: {},
   };
 }
 
@@ -35,6 +36,7 @@ export async function readConfig(): Promise<BotConfig> {
     ...parsed,
     telegram: { ...defaults.telegram, ...(parsed.telegram ?? {}) },
     chatSessions: parsed.chatSessions ?? {},
+    sessionModels: parsed.sessionModels ?? {},
   };
 }
 

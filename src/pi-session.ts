@@ -1,13 +1,19 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from '@earendil-works/pi-coding-agent';
-import { loadEnvFile, readConfig } from './config.js';
+import { loadEnvFile, readConfig, writeConfig } from './config.js';
 import type { EventSink } from './types.js';
 
 type SessionRecord = {
   session: Awaited<ReturnType<typeof createAgentSession>>['session'];
+  modelRegistry: ModelRegistry;
   busy: boolean;
   sinks: Set<EventSink>;
+};
+
+type ModelInfo = {
+  current: string;
+  available: string[];
 };
 
 export class PiSessionRegistry {
@@ -40,6 +46,37 @@ export class PiSessionRegistry {
     }
   }
 
+  async getModelInfo(sessionId: string): Promise<ModelInfo> {
+    const record = await this.getOrCreate(sessionId, () => undefined);
+    return {
+      current: record.session.model ? `${record.session.model.provider}/${record.session.model.id}` : 'none',
+      available: record.modelRegistry.getAvailable().map((model) => `${model.provider}/${model.id}`),
+    };
+  }
+
+  async setModel(sessionId: string, selector: string): Promise<ModelInfo> {
+    const record = await this.getOrCreate(sessionId, () => undefined);
+    if (record.busy) throw new Error(`Session ${sessionId} is busy; try again after the current response finishes.`);
+
+    const available = record.modelRegistry.getAvailable();
+    const matches = selector.includes('/')
+      ? available.filter((model) => `${model.provider}/${model.id}` === selector)
+      : available.filter((model) => model.id === selector);
+    if (matches.length === 0) {
+      throw new Error(`Model "${selector}" is not available. Available models: ${available.map((model) => `${model.provider}/${model.id}`).join(', ') || 'none'}`);
+    }
+    if (matches.length > 1) {
+      throw new Error(`Model id "${selector}" is ambiguous. Use provider/id: ${matches.map((model) => `${model.provider}/${model.id}`).join(', ')}`);
+    }
+
+    await record.session.setModel(matches[0]);
+    const config = await readConfig();
+    config.sessionModels[sessionId] = { provider: matches[0].provider, id: matches[0].id };
+    await writeConfig(config);
+    console.info(`changed pi session=${sessionId} model=${matches[0].provider}/${matches[0].id}`);
+    return this.getModelInfo(sessionId);
+  }
+
   private getOrCreate(sessionId: string, sink: EventSink): Promise<SessionRecord> {
     const existing = this.sessions.get(sessionId);
     if (existing) {
@@ -67,11 +104,12 @@ export class PiSessionRegistry {
     const modelRegistry = ModelRegistry.create(authStorage, join(config.piAgentDir, 'models.json'));
     const availableModels = modelRegistry.getAvailable();
     console.info(`available pi models=${availableModels.length}`);
-    const configuredModel = config.selectedModel
-      ? modelRegistry.find(config.selectedModel.provider, config.selectedModel.id)
+    const selectedModel = config.sessionModels[sessionId] ?? config.selectedModel;
+    const configuredModel = selectedModel
+      ? modelRegistry.find(selectedModel.provider, selectedModel.id)
       : undefined;
-    if (config.selectedModel && !configuredModel) {
-      const requested = `${config.selectedModel.provider}/${config.selectedModel.id}`;
+    if (selectedModel && !configuredModel) {
+      const requested = `${selectedModel.provider}/${selectedModel.id}`;
       const available = availableModels.map((model) => `${model.provider}/${model.id}`).join(', ') || 'none';
       throw new Error(`Configured Pi model ${requested} is not available or authenticated. Run \`pi-telegram-bot setup\` and choose an available model. Available models: ${available}`);
     }
@@ -101,7 +139,7 @@ export class PiSessionRegistry {
       }
     });
 
-    return { session, busy: false, sinks };
+    return { session, modelRegistry, busy: false, sinks };
   }
 }
 
