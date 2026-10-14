@@ -1,12 +1,15 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from '@earendil-works/pi-coding-agent';
+import {
+  createAgentSession, createCodemodeExtension, createMcpExtension, createToolSearchExtension,
+  DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager,
+} from '@earendil-works/pi-coding-agent';
 import { loadEnvFile, readConfig, writeConfig } from './config.js';
 import type { EventSink } from './types.js';
 
 type SessionRecord = {
   session: Awaited<ReturnType<typeof createAgentSession>>['session'];
-  modelRegistry: ModelRegistry;
+  modelRuntime: ModelRuntime;
   busy: boolean;
   sinks: Set<EventSink>;
 };
@@ -50,7 +53,7 @@ export class PiSessionRegistry {
     const record = await this.getOrCreate(sessionId, () => undefined);
     return {
       current: record.session.model ? `${record.session.model.provider}/${record.session.model.id}` : 'none',
-      available: record.modelRegistry.getAvailable().map((model) => `${model.provider}/${model.id}`),
+      available: (await record.modelRuntime.getAvailable()).map((model) => `${model.provider}/${model.id}`),
     };
   }
 
@@ -58,7 +61,7 @@ export class PiSessionRegistry {
     const record = await this.getOrCreate(sessionId, () => undefined);
     if (record.busy) throw new Error(`Session ${sessionId} is busy; try again after the current response finishes.`);
 
-    const available = record.modelRegistry.getAvailable();
+    const available = await record.modelRuntime.getAvailable();
     const matches = selector.includes('/')
       ? available.filter((model) => `${model.provider}/${model.id}` === selector)
       : available.filter((model) => model.id === selector);
@@ -86,6 +89,9 @@ export class PiSessionRegistry {
     console.info(`creating cached pi session=${sessionId}`);
     const created = this.create(sessionId, sink);
     this.sessions.set(sessionId, created);
+    void created.catch(() => {
+      if (this.sessions.get(sessionId) === created) this.sessions.delete(sessionId);
+    });
     return created;
   }
 
@@ -100,13 +106,15 @@ export class PiSessionRegistry {
     process.env.PI_CODING_AGENT_SESSION_DIR = config.sessionDir;
 
     sink({ type: 'status', text: `Creating pi session ${sessionId}` });
-    const authStorage = AuthStorage.create(join(config.piAgentDir, 'auth.json'));
-    const modelRegistry = ModelRegistry.create(authStorage, join(config.piAgentDir, 'models.json'));
-    const availableModels = modelRegistry.getAvailable();
+    const modelRuntime = await ModelRuntime.create({
+      authPath: join(config.piAgentDir, 'auth.json'),
+      modelsPath: join(config.piAgentDir, 'models.json'),
+    });
+    const availableModels = await modelRuntime.getAvailable();
     console.info(`available pi models=${availableModels.length}`);
     const selectedModel = config.sessionModels[sessionId] ?? config.selectedModel;
     const configuredModel = selectedModel
-      ? modelRegistry.find(selectedModel.provider, selectedModel.id)
+      ? availableModels.find((model) => model.provider === selectedModel.provider && model.id === selectedModel.id)
       : undefined;
     if (selectedModel && !configuredModel) {
       const requested = `${selectedModel.provider}/${selectedModel.id}`;
@@ -118,16 +126,38 @@ export class PiSessionRegistry {
     sink({ type: 'status', text: `Using model ${selected.provider}/${selected.id}` });
     console.info(`selected pi model=${selected.provider}/${selected.id}`);
 
-    const { session } = await createAgentSession({
+    const settingsManager = SettingsManager.create(config.workspaceDir, config.piAgentDir);
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: config.workspaceDir,
+      agentDir: config.piAgentDir,
+      settingsManager,
+      extensionFactories: [
+        { name: 'codemode', factory: createCodemodeExtension(), builtin: true, replaceable: true },
+        { name: 'tool_search', factory: createToolSearchExtension(), builtin: true, replaceable: true },
+        { name: 'mcp', factory: createMcpExtension(), builtin: true, replaceable: true },
+      ],
+    });
+    await resourceLoader.reload();
+
+    const { session, extensionsResult, modelFallbackMessage } = await createAgentSession({
       agentDir: config.piAgentDir,
       cwd: config.workspaceDir,
       sessionManager: openOrCreateSessionManager(config.sessionDir, config.workspaceDir, sessionId),
-      authStorage,
-      modelRegistry,
+      modelRuntime,
+      settingsManager,
+      resourceLoader,
       model: selected,
     });
 
-    console.info(`created pi SDK session=${sessionId}`);
+    for (const error of extensionsResult.errors) {
+      console.error(`pi extension load error path=${error.path}: ${error.error}`);
+    }
+    for (const warning of extensionsResult.warnings ?? []) {
+      console.warn(`pi extension warning path=${warning.path}: ${warning.warning}`);
+    }
+    if (modelFallbackMessage) console.warn(modelFallbackMessage);
+
+    console.info(`created pi SDK session=${sessionId} extensions=${extensionsResult.extensions.map((extension) => extension.path).join(',')}`);
     const sinks = new Set<EventSink>();
     session.subscribe((event: unknown) => {
       const text = extractText(event);
@@ -139,7 +169,17 @@ export class PiSessionRegistry {
       }
     });
 
-    return { session, modelRegistry, busy: false, sinks };
+    try {
+      await session.bindExtensions({
+        mode: 'print',
+        onError: (error) => console.error(`pi extension error path=${error.extensionPath} event=${error.event}: ${error.error}`),
+      });
+    } catch (error) {
+      session.dispose();
+      throw error;
+    }
+
+    return { session, modelRuntime, busy: false, sinks };
   }
 }
 

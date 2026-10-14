@@ -4,6 +4,8 @@ Host-native Telegram bridge for the Pi coding agent. It runs as a small user ser
 
 ## Setup
 
+Requires Node.js **22.19.0 or newer**. The bot embeds Pi SDK **1.2.0** (dependency range `^1.2.0`); it does not use the globally installed `pi` for its main session.
+
 From this repository:
 
 ```bash
@@ -110,3 +112,27 @@ Defaults:
 - Each Telegram chat maps to a persistent Pi session.
 - Replies are chunked to fit Telegram message limits.
 - The service logs polling, message handling, session dispatch, replies, and errors to journald.
+- Pi extensions are discovered from the configured agent directory and trusted workspace resources, and initialized in headless (`print`) mode.
+- Built-in MCP, codemode, and tool search are supplied explicitly to the SDK. They respect Pi settings, including `-builtin:mcp` and replacement extensions.
+- Terminal dialogs/widgets are not bridged to Telegram. Use a dedicated agent directory to control which extensions the bot inherits.
+
+See [the Pi upgrade and extension review](docs/pi-extension-review.md) for the installed extension inventory, compatibility findings, and recommended bot profile.
+
+## Development and upgrades
+
+```bash
+npm ci
+npm run build
+npm test
+```
+
+The tests use isolated temporary configuration and make no model-provider requests. Updating global Pi does not update this project's SDK dependency.
+
+After upgrading the repository, reinstall the CLI and restart the service to deploy it:
+
+```bash
+npm install -g .
+pi-telegram-bot restart-service
+```
+
+Deployment is separate from building/testing; these commands replace the running bot installation.
